@@ -28,6 +28,12 @@ const userSchema = new mongoose.Schema({
     type : Boolean,
     default : true 
   },
+  resetToken: { 
+    type: String 
+  },
+  resetTokenExpiration: {
+     type: Date
+     },
  
   dateOfBirth: {
     type: Date,
