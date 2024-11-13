@@ -4,13 +4,16 @@ const bcrypt = require("bcrypt");
 const nodemailer = require("nodemailer");
 // const transporter = require('../config/nodemailer')
 
-
 const JWT_SECRET = process.env.JWT_SECRET;
 const findUserByEmail = async (email) => {
   return await User.findOne({ email });
 };
 
 const createNewUser = async (userData) => {
+  const existingUser = await User.findOne({ email: userData.email });
+  if (existingUser) {
+    throw new Error("User with this email already exists");
+  }
   const user = new User(userData);
   await user.save();
   return user;
@@ -46,7 +49,7 @@ const eMailLogin = async (req, res) => {
       process.env.JWT_SECRET,
       { expiresIn: "1h" }
     );
-    res.status(200).json({ token });
+    res.status(200).json({user, token , redirect: "mainHomepage" });
   } catch (error) {
     res.status(500).json({ message: "Something went wrong" });
   }
@@ -61,36 +64,41 @@ const googleLogin = async (req, res) => {
 
     if (user) {
       if (user.password) {
-        return res
-          .status(400)
-          .json({
-            message:
-              "This email is registered with email/password. Please log in with email and password.",
-          });
+        return res.status(400).json({
+          message: "This email is registered with email/password. Please log in with email and password.",
+        });
       }
       return res
         .status(200)
         .json({ message: "User exists", user, redirect: "mainHomepage" });
     } else {
+   
       const userData = {
+        
         firstName: firstName || "",
         lastName: lastName || "",
         dateOfBirth: "",
         email,
       };
-      user = await createNewUser(userData); // No password for Google login users
-      return res
-        .status(201)
-        .json({
+      try {
+       let creatuser =  await createNewUser(userData); 
+        return res.status(201).json({
           message: "New user created, please fill out your details",
-          user,
-          redirect: "signupdetails",
+          // redirect: "signupdetails",
+          creatuser
         });
+      } catch (error) {
+        if (error.message === "User with this email already exists") {
+          return res.status(400).json({ 
+            message: "Email already registered, please log in or reset password",
+            redirect: "login"
+          });
+        }
+        throw error;
+      }
     }
   } catch (error) {
-    return error.code === 11000
-      ? handleDuplicateError(res, error)
-      : handleServerError(res, error);
+    return handleDuplicateError(res, error);
   }
 };
 
@@ -106,51 +114,40 @@ const updateUserDetails = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    Object.assign(user, { firstName, lastName, dateOfBirth, email });
-    await user.save();
+    // Update only if fields are provided
+    const updatedFields = {};
+    if (firstName) updatedFields.firstName = firstName;
+    if (lastName) updatedFields.lastName = lastName;
+    if (dateOfBirth) updatedFields.dateOfBirth = dateOfBirth;
+    if (email) updatedFields.email = email;
 
-    return res.status(200).json({ message: "User updated successfully", user });
+    Object.assign(user, updatedFields);
+    
+    try {
+      await user.save();
+      res.status(200).json({ 
+        message: "User updated successfully", 
+        user,
+        redirect: "mainHomepage"
+      });
+    } catch (saveError) {
+      console.error("Error saving user update:", saveError);
+      res.status(500).json({ message: "Failed to save user updates", error: saveError.message });
+    }
   } catch (error) {
-    return handleServerError(res, error);
+    console.error("Unexpected error updating user:", error);
+    res.status(500).json({ message: "Something went wrong", error: error.message });
   }
 };
 
-// Email Signup Function
-// const emailSignup = async (req, res) => {
-//   try{
-//   const { email, password, role} = req.body;
-//   const hashedPassword =  await bcrypt.hash(password , 10)
-//   const newUser = new User({email , password:hashedPassword , role})
-//   await newUser.save()
-//   res.status(201).json({message: `User registered with email ${email}`})
-//   } catch(err){
-//     res.status(500).json({message: "SOmething went wrong"})
-//   }
 
-//   try {
-//     let user = await findUserByEmail(email);
-
-//     if (user) {
-//       return res.status(400).json({ message: 'User already exists. Please log in.' ,redirect: 'loginPage' });
-//     }
-// else{
-//     const newUser = await createNewUser({ email, password, firstName, lastName });
-//     return res.status(201).json({ message: 'User created successfully. Please complete your signup.', user: newUser  });
-// }
-// // const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: "1h" });
-
-// // res.status(200).json({ message: "Login successful", token });
-//   } catch (error) {
-//     return error.code === 11000 ? handleDuplicateError(res, error) : handleServerError(res, error);
-//   }
-// };
 const emailSignup = async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {
       return res
         .status(400)
-        .json({ message: "Email, password and role are required" });
+        .json({ message: "Email, password  are required" });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -158,7 +155,7 @@ const emailSignup = async (req, res) => {
 
     try {
       await newUser.save();
-      res.status(201).json({ message: `User registered with email ${email}` });
+      res.status(201).json({ message: `User registered with email ${email} ` , newUser });
     } catch (saveError) {
       console.error("Error saving user:", saveError);
       res
@@ -178,11 +175,10 @@ const transporter = nodemailer.createTransport({
   host: "smtp.ethereal.email",
   // service: "gmail",
   auth: {
-    user: 'verlie.bartoletti@ethereal.email',
-    pass: '9CtGb5CgGbzMHQEcmf'
+    user: "verlie.bartoletti@ethereal.email",
+    pass: "9CtGb5CgGbzMHQEcmf",
   },
 });
-
 
 const forgotPassword = async (req, res) => {
   const { email } = req.body;
@@ -195,7 +191,7 @@ const forgotPassword = async (req, res) => {
       expiresIn: "1h",
     });
     user.resetToken = token;
-    user.resetTokenExpiration = Date.now() + 3600000; 
+    user.resetTokenExpiration = Date.now() + 3600000;
     await user.save();
     console.log("Saved User with Token:", user);
     const resetLink = `http://localhost:5173/reset-password/${token}`;
@@ -203,7 +199,7 @@ const forgotPassword = async (req, res) => {
     await transporter.sendMail({
       from: `"Ranjana Kralta" <ranjna@gmail.com"`,
       to: user.email,
-      to:"ranjana.codeskape@gmail.com",
+      to: "ranjana.codeskape@gmail.com",
       subject: "Password Reset",
       html: `<p>Click <a href="${resetLink}">here</a> to reset your password.</p>`,
     });
@@ -221,16 +217,16 @@ const resetPassword = async (req, res) => {
 
   try {
     const decodedToken = jwt.verify(token, JWT_SECRET);
-    console.log("Decoded token" , decodedToken)
+    console.log("Decoded token", decodedToken);
     const user = await User.findOne({
       _id: decodedToken.userId,
       resetToken: token,
       resetTokenExpiration: { $gt: Date.now() },
     });
 
-    if (!user){
-// console.log("No user found with matching resetToken or token expired");
-return res.status(400).json({ message: "Invalid or expired token" });
+    if (!user) {
+      // console.log("No user found with matching resetToken or token expired");
+      return res.status(400).json({ message: "Invalid or expired token" });
     }
 
     user.password = await bcrypt.hash(password, 10);
@@ -253,4 +249,3 @@ module.exports = {
   forgotPassword,
   resetPassword,
 };
-
